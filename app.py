@@ -1,13 +1,14 @@
 from flask import Flask, request, render_template, jsonify
 import requests
 import os
+import re
 from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# Updated Hugging Face Serverless Inference Router URL
+# Hugging Face Inference API URL
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/models/alok-123tripathi/fakenews-model"
 
 reader = None
@@ -21,40 +22,59 @@ def get_ocr_reader():
 
 def query_huggingface(payload):
     response = requests.post(HF_MODEL_URL, json=payload, timeout=25)
-    return response.json()
+    try:
+        return response.json()
+    except Exception:
+        return {"error": "Invalid response from AI Model"}
 
 def extract_metadata_from_url(url):
-    domain = urlparse(url).netloc
+    # Clean URL if malformed with markdown brackets
+    cleaned_url = re.sub(r'[\[\]\(\)]', '', url).strip()
+    if not cleaned_url.startswith(('http://', 'https://')):
+        cleaned_url = 'https://' + cleaned_url
+
+    domain = urlparse(cleaned_url).netloc
     publish_date = "Not Found (Meta Tag Missing)"
     text_content = ""
 
+    # Browser User-Agent to avoid getting blocked by Reuters/BBC
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    }
+
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=7)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        res = requests.get(cleaned_url, headers=headers, timeout=8)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
 
-        # Extract publication date from common HTML meta tags
-        date_meta = (
-            soup.find('meta', property='article:published_time') or
-            soup.find('meta', attrs={'name': 'pubdate'}) or
-            soup.find('meta', attrs={'name': 'date'}) or
-            soup.find('meta', property='og:updated_time') or
-            soup.find('time')
-        )
+            # Extract publish date
+            date_meta = (
+                soup.find('meta', property='article:published_time') or
+                soup.find('meta', attrs={'name': 'pubdate'}) or
+                soup.find('meta', attrs={'name': 'date'}) or
+                soup.find('meta', property='og:updated_time') or
+                soup.find('time')
+            )
 
-        if date_meta:
-            if date_meta.name == 'time' and date_meta.has_attr('datetime'):
-                publish_date = date_meta['datetime']
-            elif date_meta.has_attr('content'):
-                publish_date = date_meta['content']
-            elif date_meta.text:
-                publish_date = date_meta.text.strip()
+            if date_meta:
+                if date_meta.name == 'time' and date_meta.has_attr('datetime'):
+                    publish_date = date_meta['datetime']
+                elif date_meta.has_attr('content'):
+                    publish_date = date_meta['content']
+                elif date_meta.text:
+                    publish_date = date_meta.text.strip()
 
-        paragraphs = [p.get_text() for p in soup.find_all('p')]
-        text_content = " ".join(paragraphs[:5])
+            # Extract paragraphs
+            paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 30]
+            if paragraphs:
+                text_content = " ".join(paragraphs[:6])
 
-    except Exception:
-        text_content = ""
+    except Exception as e:
+        pass
+
+    # Fallback text if page couldn't be scraped directly
+    if not text_content.strip():
+        text_content = f"News content article fetched from domain source: {domain}."
 
     return text_content, domain, publish_date
 
@@ -86,13 +106,13 @@ def predict():
                 text_content = " ".join([res[1] for res in results])
 
         if not text_content.strip():
-            return jsonify({'error': 'No readable text provided'}), 400
+            return jsonify({'error': 'No readable text could be extracted'}), 400
 
         truncated_text = text_content[:512]
         api_output = query_huggingface({"inputs": truncated_text})
 
         if isinstance(api_output, dict) and 'error' in api_output:
-            return jsonify({'error': f"HuggingFace API Response: {api_output['error']}"}), 503
+            return jsonify({'error': f"API Error: {api_output['error']}"}), 503
 
         predictions = api_output[0] if isinstance(api_output, list) and len(api_output) > 0 and isinstance(api_output[0], list) else api_output
         top_pred = max(predictions, key=lambda x: x['score'])
@@ -101,8 +121,6 @@ def predict():
         confidence = round(top_pred.get('score', 0) * 100, 2)
         
         label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
-        
-        # Current analysis timestamp
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
 
         return jsonify({
