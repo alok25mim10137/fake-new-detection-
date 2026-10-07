@@ -1,1 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fake News Intelligence Portal</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+        .nav-pills .nav-link { color: #94a3b8; font-weight: 600; }
+        .nav-pills .nav-link.active { background-color: #3b82f6; color: #ffffff; }
+        .btn-primary { background-color: #2563eb; border: none; font-weight: 600; }
+        .btn-primary:hover { background-color: #1d4ed8; }
+        .result-box { display: none; margin-top: 20px; padding: 20px; border-radius: 8px; font-weight: bold; }
+        .badge-real { background-color: #16a34a; color: white; font-size: 1.2rem; }
+        .badge-fake { background-color: #dc2626; color: white; font-size: 1.2rem; }
+    </style>
+</head>
+<body>
+    <div class="container py-5">
+        <div class="text-center mb-5">
+            <h1 class="display-4 fw-bold text-primary">Fake News Intelligence Portal</h1>
+            <p class="text-secondary">Multimodal AI Detection using DistilRoBERTa Model</p>
+        </div>
 
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card p-4 shadow-lg">
+                    <ul class="nav nav-pills nav-justified mb-4" id="pills-tab" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active" id="pills-text-tab" data-bs-toggle="pill" data-bs-target="#pills-text" type="button">Text</button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" id="pills-url-tab" data-bs-toggle="pill" data-bs-target="#pills-url" type="button">URL Link</button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" id="pills-image-tab" data-bs-toggle="pill" data-bs-target="#pills-image" type="button">Image OCR</button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content" id="pills-tabContent">
+                        <!-- Text Input -->
+                        <div class="tab-pane fade show active" id="pills-text">
+                            <textarea id="textContent" class="form-control bg-dark text-light border-secondary" rows="5" placeholder="Paste news article text here..."></textarea>
+                            <button class="btn btn-primary w-100 mt-3" onclick="analyzeText()">Analyze Text</button>
+                        </div>
+
+                        <!-- URL Input -->
+                        <div class="tab-pane fade" id="pills-url">
+                            <input type="url" id="urlContent" class="form-control bg-dark text-light border-secondary" placeholder="https://example.com/news-article">
+                            <button class="btn btn-primary w-100 mt-3" onclick="analyzeUrl()">Analyze URL</button>
+                        </div>
+
+                        <!-- Image Input -->
+                        <div class="tab-pane fade" id="pills-image">
+                            <input type="file" id="imageContent" class="form-control bg-dark text-light border-secondary" accept="image/*">
+                            <button class="btn btn-primary w-100 mt-3" onclick="analyzeImage()">Analyze Image</button>
+                        </div>
+                    </div>
+
+                    <!-- Loader & Result Section -->
+                    <div id="loader" class="text-center mt-4" style="display: none;">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <p class="mt-2 text-secondary">Analyzing with Deep Learning Model...</p>
+                    </div>
+
+                    <div id="resultBox" class="result-box text-center">
+                        <h4>Prediction: <span id="resLabel" class="badge"></span></h4>
+                        <p class="mt-2 mb-0">Confidence Score: <strong id="resConfidence"></strong>%</p>
+                        <p class="text-muted small mt-2" id="resExtracted"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function sendRequest(payload, isFormData = false) {
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('resultBox').style.display = 'none';
+
+            let options = { method: 'POST' };
+            if (isFormData) {
+                options.body = payload;
+            } else {
+                options.headers = { 'Content-Type': 'application/json' };
+                options.body = JSON.stringify(payload);
+            }
+
+            try {
+                let response = await fetch('/predict', options);
+                let data = await response.json();
+                
+                document.getElementById('loader').style.display = 'none';
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                let resBox = document.getElementById('resultBox');
+                let resLabel = document.getElementById('resLabel');
+                
+                resLabel.innerText = data.label;
+                resLabel.className = 'badge ' + (data.label === 'REAL' ? 'badge-real' : 'badge-fake');
+                document.getElementById('resConfidence').innerText = data.confidence;
+                document.getElementById('resExtracted').innerText = data.extracted_text ? 'Processed Text: ' + data.extracted_text : '';
+                
+                resBox.style.display = 'block';
+            } catch (e) {
+                document.getElementById('loader').style.display = 'none';
+                alert('Server error, please try again.');
+            }
+        }
+
+        function analyzeText() {
+            let text = document.getElementById('textContent').value;
+            if (!text) return alert('Please enter text!');
+            sendRequest({ type: 'text', content: text });
+        }
+
+        function analyzeUrl() {
+            let url = document.getElementById('urlContent').value;
+            if (!url) return alert('Please enter URL!');
+            sendRequest({ type: 'url', content: url });
+        }
+
+        function analyzeImage() {
+            let fileInput = document.getElementById('imageContent');
+            if (!fileInput.files[0]) return alert('Please select an image!');
+            let formData = new FormData();
+            formData.append('type', 'image');
+            formData.append('file', fileInput.files[0]);
+            sendRequest(formData, true);
+        }
+    </script>
+</body>
+</html>
