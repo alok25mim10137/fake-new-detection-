@@ -1,51 +1,30 @@
-import os
-import re
-import requests
-import torch
-import easyocr
-from bs4 import BeautifulSoup
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, render_template, jsonify
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+import requests
+from bs4 import BeautifulSoup
+import os
+
+# Limit PyTorch memory & threads for 512MB RAM server
+torch.set_num_threads(1)
 
 app = Flask(__name__)
 
-# Hugging Face Trained Model
+# Load model and tokenizer
 MODEL_NAME = "alok-123tripathi/fakenews-model"
-
-print("Loading Model and Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
 model.eval()
 
-# Initialize EasyOCR Reader (English)
-ocr_reader = easyocr.Reader(['en'], gpu=False)
+# Global OCR variable (Lazy Loaded)
+reader = None
 
-def predict_text(text):
-    if not text or not text.strip():
-        return None, 0.0
-    
-    inputs = tokenizer(text, truncation=True, padding="max_length", max_length=128, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**inputs)
-        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-        confidence, prediction = torch.max(probs, dim=-1)
-    
-    # 1 = REAL, 0 = FAKE
-    label = "REAL" if prediction.item() == 1 else "FAKE"
-    return label, round(confidence.item() * 100, 2)
-
-def extract_text_from_url(url):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Extract paragraphs
-        paragraphs = soup.find_all('p')
-        text = ' '.join([p.get_text() for p in paragraphs])
-        return text[:1000] # Limit length for analysis
-    except Exception as e:
-        return ""
+def get_ocr_reader():
+    global reader
+    if reader is None:
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False)
+    return reader
 
 @app.route('/')
 def home():
@@ -53,41 +32,48 @@ def home():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    input_type = request.form.get('type', 'text')
-    extracted_text = ""
-    
-    if input_type == 'text':
-        extracted_text = request.form.get('text', '')
-    
-    elif input_type == 'url':
-        url = request.form.get('url', '')
-        extracted_text = extract_text_from_url(url)
-        if not extracted_text:
-            return jsonify({'error': 'Could not scrape text from the provided URL.'}), 400
-            
-    elif input_type == 'image':
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image file uploaded.'}), 400
-        
-        file = request.files['image']
-        image_bytes = file.read()
-        
-        # Perform OCR
-        results = ocr_reader.readtext(image_bytes)
-        extracted_text = " ".join([res[1] for res in results])
-        
-        if not extracted_text.strip():
-            return jsonify({'error': 'No readable text found in image.'}), 400
+    try:
+        data = request.get_json(silent=True) or {}
+        input_type = data.get('type') or request.form.get('type')
+        text_content = ""
 
-    label, confidence = predict_text(extracted_text)
-    
-    return jsonify({
-        'status': 'success',
-        'label': label,
-        'confidence': f"{confidence}%",
-        'extracted_text': extracted_text[:200] + "..." if len(extracted_text) > 200 else extracted_text
-    })
-import os
+        if input_type == 'text':
+            text_content = data.get('content') or request.form.get('content', '')
+
+        elif input_type == 'url':
+            url = data.get('content') or request.form.get('content', '')
+            res = requests.get(url, timeout=5)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            paragraphs = [p.get_text() for p in soup.find_all('p')]
+            text_content = " ".join(paragraphs[:5])
+
+        elif input_type == 'image':
+            if 'file' in request.files:
+                file = request.files['file']
+                ocr_engine = get_ocr_reader()
+                results = ocr_engine.readtext(file.read())
+                text_content = " ".join([res[1] for res in results])
+
+        if not text_content.strip():
+            return jsonify({'error': 'No readable text provided'}), 400
+
+        # Model Inference with torch.no_grad() to save RAM
+        inputs = tokenizer(text_content, return_tensors="pt", truncation=True, max_length=128)
+        with torch.no_grad():
+            outputs = model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=-1)
+            pred_class = torch.argmax(probs, dim=-1).item()
+            confidence = round(probs[0][pred_class].item() * 100, 2)
+
+        label = "REAL" if pred_class == 1 else "FAKE"
+        return jsonify({
+            'label': label,
+            'confidence': confidence,
+            'extracted_text': text_content[:300]
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
