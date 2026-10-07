@@ -1,22 +1,14 @@
 from flask import Flask, request, render_template, jsonify
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
 import requests
-from bs4 import BeautifulSoup
 import os
-
-# Limit PyTorch memory & threads for 512MB RAM server
-torch.set_num_threads(1)
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# Load model and tokenizer
-MODEL_NAME = "alok-123tripathi/fakenews-model"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-model.eval()
+# Hugging Face Inference API Endpoint
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/alok-123tripathi/fakenews-model"
 
-# Global OCR variable (Lazy Loaded)
+# Lazy loaded EasyOCR
 reader = None
 
 def get_ocr_reader():
@@ -25,6 +17,11 @@ def get_ocr_reader():
         import easyocr
         reader = easyocr.Reader(['en'], gpu=False)
     return reader
+
+def query_huggingface(payload):
+    # Free public inference call
+    response = requests.post(HF_MODEL_URL, json=payload, timeout=20)
+    return response.json()
 
 @app.route('/')
 def home():
@@ -57,15 +54,27 @@ def predict():
         if not text_content.strip():
             return jsonify({'error': 'No readable text provided'}), 400
 
-        # Model Inference with torch.no_grad() to save RAM
-        inputs = tokenizer(text_content, return_tensors="pt", truncation=True, max_length=128)
-        with torch.no_grad():
-            outputs = model(**inputs)
-            probs = torch.softmax(outputs.logits, dim=-1)
-            pred_class = torch.argmax(probs, dim=-1).item()
-            confidence = round(probs[0][pred_class].item() * 100, 2)
+        # Truncate input text
+        truncated_text = text_content[:512]
 
-        label = "REAL" if pred_class == 1 else "FAKE"
+        # Query HuggingFace Serverless API
+        api_output = query_huggingface({"inputs": truncated_text})
+
+        # Handle API response structure
+        if isinstance(api_output, dict) and 'error' in api_output:
+            # If model is loading on HF end, wait or notify
+            return jsonify({'error': 'Model is initializing on HuggingFace. Please try again in 20 seconds.'}), 503
+
+        # Parse HF response
+        predictions = api_output[0] if isinstance(api_output, list) and len(api_output) > 0 and isinstance(api_output[0], list) else api_output
+        top_pred = max(predictions, key=lambda x: x['score'])
+        
+        # Mapping label output
+        raw_label = top_pred.get('label', '')
+        confidence = round(top_pred.get('score', 0) * 100, 2)
+        
+        label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
+
         return jsonify({
             'label': label,
             'confidence': confidence,
