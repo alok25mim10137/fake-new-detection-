@@ -1,8 +1,9 @@
-flask
-transformers
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch
+transformers
 easyocr
 beautifulsoup4
 requests
 gunicorn
+flask
 python-multipart
