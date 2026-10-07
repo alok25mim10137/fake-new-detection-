@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fake News Intelligence Portal</title>
+    <title>Fake News Intelligence Portal - Alok Tripathi</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -12,15 +12,17 @@
         .nav-pills .nav-link.active { background-color: #3b82f6; color: #ffffff; }
         .btn-primary { background-color: #2563eb; border: none; font-weight: 600; }
         .btn-primary:hover { background-color: #1d4ed8; }
-        .result-box { display: none; margin-top: 20px; padding: 20px; border-radius: 8px; font-weight: bold; }
+        .result-box { display: none; margin-top: 20px; padding: 20px; border-radius: 8px; font-weight: bold; background-color: #0f172a; border: 1px solid #334155; }
         .badge-real { background-color: #16a34a; color: white; font-size: 1.2rem; }
         .badge-fake { background-color: #dc2626; color: white; font-size: 1.2rem; }
+        .developer-badge { background-color: #3b82f6; color: white; padding: 5px 15px; border-radius: 20px; font-size: 0.9rem; display: inline-block; }
     </style>
 </head>
 <body>
     <div class="container py-5">
-        <div class="text-center mb-5">
+        <div class="text-center mb-4">
             <h1 class="display-4 fw-bold text-primary">Fake News Intelligence Portal</h1>
+            <div class="developer-badge mb-2">Developed by: <strong>Alok Tripathi</strong></div>
             <p class="text-secondary">Multimodal AI Detection using DistilRoBERTa Model</p>
         </div>
 
@@ -62,13 +64,21 @@
                     <!-- Loader & Result Section -->
                     <div id="loader" class="text-center mt-4" style="display: none;">
                         <div class="spinner-border text-primary" role="status"></div>
-                        <p class="mt-2 text-secondary">Analyzing with Deep Learning Model...</p>
+                        <p class="mt-2 text-secondary">Analyzing content with Deep Learning Model...</p>
                     </div>
 
                     <div id="resultBox" class="result-box text-center">
                         <h4>Prediction: <span id="resLabel" class="badge"></span></h4>
-                        <p class="mt-2 mb-0">Confidence Score: <strong id="resConfidence"></strong>%</p>
-                        <p class="text-muted small mt-2" id="resExtracted"></p>
+                        <p class="mt-2 mb-1">Confidence Score: <strong id="resConfidence"></strong>%</p>
+                        
+                        <hr class="border-secondary my-3">
+                        
+                        <div class="text-start small text-light">
+                            <p class="mb-1" id="resSourceBox" style="display:none;"><strong>Source / Domain:</strong> <span id="resSource" class="text-info"></span></p>
+                            <p class="mb-1" id="resPublishBox" style="display:none;"><strong>Published On:</strong> <span id="resPublishDate" class="text-warning"></span></p>
+                            <p class="mb-1"><strong>Analyzed At (Timestamp):</strong> <span id="resTimestamp" class="text-secondary"></span></p>
+                            <p class="mb-0 mt-2 text-muted" id="resExtracted"></p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -105,7 +115,23 @@
                 resLabel.innerText = data.label;
                 resLabel.className = 'badge ' + (data.label === 'REAL' ? 'badge-real' : 'badge-fake');
                 document.getElementById('resConfidence').innerText = data.confidence;
-                document.getElementById('resExtracted').innerText = data.extracted_text ? 'Processed Text: ' + data.extracted_text : '';
+                document.getElementById('resTimestamp').innerText = data.timestamp;
+
+                if (data.source_domain) {
+                    document.getElementById('resSource').innerText = data.source_domain;
+                    document.getElementById('resSourceBox').style.display = 'block';
+                } else {
+                    document.getElementById('resSourceBox').style.display = 'none';
+                }
+
+                if (data.publish_date) {
+                    document.getElementById('resPublishDate').innerText = data.publish_date;
+                    document.getElementById('resPublishBox').style.display = 'block';
+                } else {
+                    document.getElementById('resPublishBox').style.display = 'none';
+                }
+
+                document.getElementById('resExtracted').innerText = data.extracted_text ? 'Sample Context: ' + data.extracted_text : '';
                 
                 resBox.style.display = 'block';
             } catch (e) {
