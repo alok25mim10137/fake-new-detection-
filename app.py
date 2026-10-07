@@ -8,8 +8,12 @@ from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# Updated Hugging Face Serverless Inference Router URL
+# Hugging Face Router URL
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/models/alok-123tripathi/fakenews-model"
+
+# OPTIONAL: Agar aapka token HF_TOKEN environment variable me set hai to render automatic utha lega, 
+# nahi to yahan "hf_xxxx" ki jagah apna token likh sakte hain.
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 reader = None
 
@@ -24,32 +28,36 @@ def query_huggingface(payload):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
+    if HF_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+
     try:
         response = requests.post(HF_MODEL_URL, json=payload, headers=headers, timeout=30)
-        # Check if response status is OK
+        
         if response.status_code == 200:
             return response.json()
         elif response.status_code == 503:
-            return {"error": "Model is currently loading on Hugging Face. Please try again in 15-20 seconds."}
+            return {"error": "Model is warming up on Hugging Face. Please click Analyze again in 15 seconds."}
         else:
-            return {"error": f"Hugging Face API returned status {response.status_code}"}
+            return {"error": f"Hugging Face HTTP {response.status_code}: {response.text[:100]}"}
+            
     except Exception as e:
         return {"error": f"API Connection Error: {str(e)}"}
 
-def extract_metadata_from_url(url):
-    # Auto-clean any markdown formatting or extra brackets
-    cleaned_url = re.sub(r'[\{\}\[\]\(\)]', '', url).strip()
-    if 'http' in cleaned_url:
-        cleaned_url = 'http' + cleaned_url.split('http')[-1]
-    elif not cleaned_url.startswith(('http://', 'https://')):
-        cleaned_url = 'https://' + cleaned_url
+def extract_metadata_from_url(raw_input):
+    # Extremely aggressive URL cleaner for double pasted / markdown URLs
+    urls_found = re.findall(r'https?://[^\s\]\)\>\"\']+', raw_input)
+    if urls_found:
+        cleaned_url = urls_found[0]
+    else:
+        cleaned_url = raw_input.strip()
 
     domain = urlparse(cleaned_url).netloc
     publish_date = "Not Found (Meta Tag Missing)"
     text_content = ""
 
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
 
     try:
@@ -80,9 +88,8 @@ def extract_metadata_from_url(url):
     except Exception:
         pass
 
-    # Safety Fallback
     if not text_content.strip():
-        text_content = f"Official news report content fetched from verified publisher domain: {domain if domain else 'Unknown Source'}."
+        text_content = f"Official news content fetched from news source domain: {domain if domain else 'External Website'}."
 
     return text_content, domain, publish_date
 
@@ -114,16 +121,14 @@ def predict():
                 text_content = " ".join([res[1] for res in results])
 
         if not text_content.strip():
-            text_content = "Default news article sample for verification."
+            text_content = "Default news article text sample."
 
         truncated_text = text_content[:512]
         api_output = query_huggingface({"inputs": truncated_text})
 
-        # Handle dict response with error key
         if isinstance(api_output, dict) and 'error' in api_output:
             return jsonify({'error': api_output['error']}), 503
 
-        # Safely parse nested predictions
         predictions = None
         if isinstance(api_output, list) and len(api_output) > 0:
             if isinstance(api_output[0], list):
@@ -134,7 +139,7 @@ def predict():
             predictions = [api_output]
 
         if not predictions:
-            return jsonify({'error': 'Could not parse response from Hugging Face Model.'}), 500
+            return jsonify({'error': 'Could not parse prediction response.'}), 500
 
         top_pred = max(predictions, key=lambda x: x.get('score', 0))
         
