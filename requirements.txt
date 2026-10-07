@@ -1,0 +1,8 @@
+flask
+transformers
+torch
+easyocr
+beautifulsoup4
+requests
+gunicorn
+python-multipart
