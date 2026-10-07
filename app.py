@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 app = Flask(__name__)
 
+# Updated Hugging Face Serverless Inference Router URL
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/models/alok-123tripathi/fakenews-model"
 
 reader = None
@@ -32,7 +33,7 @@ def extract_metadata_from_url(url):
         res = requests.get(url, headers=headers, timeout=7)
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # Try extracting publication date from common HTML meta tags
+        # Extract publication date from common HTML meta tags
         date_meta = (
             soup.find('meta', property='article:published_time') or
             soup.find('meta', attrs={'name': 'pubdate'}) or
@@ -52,7 +53,7 @@ def extract_metadata_from_url(url):
         paragraphs = [p.get_text() for p in soup.find_all('p')]
         text_content = " ".join(paragraphs[:5])
 
-    except Exception as e:
+    except Exception:
         text_content = ""
 
     return text_content, domain, publish_date
