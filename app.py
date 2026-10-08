@@ -4,7 +4,7 @@ import os
 import re
 import json
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 from dateutil import parser
 
@@ -93,7 +93,7 @@ def extract_metadata_from_url(raw_input):
                     val = tag['content']
                     try:
                         parsed_dt = parser.parse(val)
-                        publish_date = parsed_dt.strftime("%Y-%m-%d %H:%M:%S IST")
+                        publish_date = parsed_dt.strftime("%Y-%m-%d %H:%M IST")
                         break
                     except Exception:
                         date_match = re.search(r'20\d{2}[-/]\d{2}[-/]\d{2}', val)
@@ -113,7 +113,7 @@ def extract_metadata_from_url(raw_input):
                             date_val = data.get('datePublished') or data.get('dateCreated') or data.get('uploadDate')
                             if date_val:
                                 parsed_dt = parser.parse(str(date_val))
-                                publish_date = parsed_dt.strftime("%Y-%m-%d %H:%M:%S IST")
+                                publish_date = parsed_dt.strftime("%Y-%m-%d %H:%M IST")
                                 break
                         if publish_date != "Not Found":
                             break
@@ -300,12 +300,14 @@ def predict():
         if not label:
             label, confidence = local_heuristic_classifier(truncated_text)
 
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Indian Standard Time (IST = UTC + 5:30)
+        ist_time = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        current_time_ist = ist_time.strftime("%Y-%m-%d %H:%M:%S IST")
 
         return jsonify({
             'label': label,
             'confidence': confidence,
-            'timestamp': current_time,
+            'timestamp': current_time_ist,
             'source_domain': source_domain,
             'publish_date': publish_date,
             'extracted_text': text_content[:250]
