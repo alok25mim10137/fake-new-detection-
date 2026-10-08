@@ -1,7 +1,7 @@
 Flask
 requests
 beautifulsoup4
-easyocr
+easyocr 
 newspaper3k
 python-dateutil
 gunicorn
