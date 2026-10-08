@@ -1,5 +1,6 @@
-flask
-easyocr
-beautifulsoup4
+Flask
 requests
-gunicorn
+beautifulsoup4
+easyocr
+newspaper3k
+python-dateutil
