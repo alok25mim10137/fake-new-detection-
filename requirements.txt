@@ -4,3 +4,5 @@ beautifulsoup4
 easyocr
 python-dateutil
 gunicorn
+lxml_html_clean
+newspaper3k
