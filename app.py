@@ -58,6 +58,7 @@ def query_huggingface(payload):
         return None, f"Connection Failed: {str(e)}"
 
 def extract_metadata_from_url(raw_input):
+    # Clean markdown formatted links like [url](url)
     urls_found = re.findall(r'https?://[^\s\]\)\>\"\']+', raw_input)
     cleaned_url = urls_found[0] if urls_found else raw_input.strip()
 
@@ -68,50 +69,55 @@ def extract_metadata_from_url(raw_input):
     publish_date = "Not Found (Meta Tag Missing)"
     text_content = ""
 
+    # Anti-bot Headers to avoid 403 Forbidden on news sites
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
     }
 
     try:
-        res = requests.get(cleaned_url, headers=headers, timeout=8)
+        res = requests.get(cleaned_url, headers=headers, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
 
-            # 1. JSON-LD scripts
-            for script in soup.find_all('script', type='application/ld+json'):
-                try:
-                    data = json.loads(script.string or '{}')
-                    if isinstance(data, list):
-                        data = data[0] if len(data) > 0 else {}
-                    
-                    date_val = data.get('datePublished') or data.get('dateCreated') or data.get('uploadDate')
-                    if date_val:
-                        publish_date = str(date_val).split('T')[0]
-                        break
-                except Exception:
-                    continue
+            # 1. Try Meta Tags
+            date_meta = (
+                soup.find('meta', property='article:published_time') or
+                soup.find('meta', attrs={'name': 'publish-date'}) or
+                soup.find('meta', attrs={'name': 'pubdate'}) or
+                soup.find('meta', attrs={'name': 'date'}) or
+                soup.find('meta', property='og:updated_time') or
+                soup.find('time')
+            )
 
-            # 2. Meta Tags Fallback
+            if date_meta:
+                if date_meta.name == 'time' and date_meta.has_attr('datetime'):
+                    publish_date = date_meta['datetime'].split('T')[0]
+                elif date_meta.has_attr('content'):
+                    publish_date = date_meta['content'].split('T')[0]
+                elif date_meta.text:
+                    publish_date = date_meta.text.strip()
+
+            # 2. Try JSON-LD if Meta tag is missing
             if "Not Found" in publish_date:
-                date_meta = (
-                    soup.find('meta', property='article:published_time') or
-                    soup.find('meta', attrs={'name': 'pubdate'}) or
-                    soup.find('meta', attrs={'name': 'date'}) or
-                    soup.find('meta', property='og:updated_time') or
-                    soup.find('time')
-                )
+                for script in soup.find_all('script', type='application/ld+json'):
+                    try:
+                        data = json.loads(script.string or '{}')
+                        if isinstance(data, list):
+                            data = data[0] if len(data) > 0 else {}
+                        
+                        date_val = data.get('datePublished') or data.get('dateCreated') or data.get('uploadDate')
+                        if date_val:
+                            publish_date = str(date_val).split('T')[0]
+                            break
+                    except Exception:
+                        continue
 
-                if date_meta:
-                    if date_meta.name == 'time' and date_meta.has_attr('datetime'):
-                        publish_date = date_meta['datetime'].split('T')[0]
-                    elif date_meta.has_attr('content'):
-                        publish_date = date_meta['content'].split('T')[0]
-                    elif date_meta.text:
-                        publish_date = date_meta.text.strip()
-
-            paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 30]
+            # Extract Content Paragraphs
+            paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 35]
             if paragraphs:
-                text_content = " ".join(paragraphs[:6])
+                text_content = " ".join(paragraphs[:5])
 
     except Exception:
         pass
@@ -121,7 +127,7 @@ def extract_metadata_from_url(raw_input):
 
     return text_content, domain, publish_date
 
-# Embedded Single-File HTML Interface
+# Embedded HTML Interface
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -148,7 +154,7 @@ HTML_TEMPLATE = """
     <div class="container" style="max-width: 800px;">
         <div class="text-center mb-4">
             <h1 class="fw-bold text-primary">Fake News Intelligence Portal</h1>
-            <p class="text-secondary">Multimodal AI Detection using DistilRoBERTa Model</p>
+            <p class="text-secondary">Multimodal AI Detection System</p>
         </div>
 
         <div class="main-card p-4">
@@ -189,8 +195,8 @@ HTML_TEMPLATE = """
                 </div>
                 <hr class="border-secondary">
                 <div id="metadata-section" style="font-size: 0.95rem;">
-                    <p class="mb-1" id="domain-row"><strong>Source / Domain:</strong> <span id="source-domain" class="text-info">N/A</span></p>
-                    <p class="mb-1" id="pubdate-row"><strong>Published On:</strong> <span id="publish-date" class="text-warning">N/A</span></p>
+                    <p class="mb-1"><strong>Source / Domain:</strong> <span id="source-domain" class="text-info">N/A</span></p>
+                    <p class="mb-1"><strong>Published On:</strong> <span id="publish-date" class="text-warning">N/A</span></p>
                     <p class="mb-1"><strong>Analyzed At (Timestamp):</strong> <span id="timestamp" class="text-light">N/A</span></p>
                     <p class="mt-3 mb-0 text-muted" style="font-size: 0.85rem;"><strong>Sample Context:</strong> <span id="extracted-text"></span></p>
                 </div>
@@ -296,7 +302,7 @@ def predict():
             confidence = round(top_pred.get('score', 0) * 100, 2)
             label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
         
-        # Automatic Fallback Engine if API fails or sleeps
+        # Automatic Fallback Engine
         if not label:
             label, confidence = local_heuristic_classifier(truncated_text)
 
