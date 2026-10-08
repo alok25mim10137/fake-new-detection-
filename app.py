@@ -6,10 +6,11 @@ import json
 from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urlparse
+from newspaper import Article
+from dateutil import parser
 
 app = Flask(__name__)
 
-# Modern Hugging Face Inference Router Endpoint
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/v1/models/alok-123tripathi/fakenews-model"
 
 reader = None
@@ -58,76 +59,101 @@ def query_huggingface(payload):
         return None, f"Connection Failed: {str(e)}"
 
 def extract_metadata_from_url(raw_input):
-    # Clean markdown formatted links like [url](url)
-    urls_found = re.findall(r'https?://[^\s\]\)\>\"\']+', raw_input)
-    cleaned_url = urls_found[0] if urls_found else raw_input.strip()
+    # 1. Strip markdown and extra spaces
+    cleaned_url = re.sub(r'[\[\]\(\)]', '', raw_input).strip()
+    urls_found = re.findall(r'https?://[^\s\"\']+', cleaned_url)
+    cleaned_url = urls_found[0] if urls_found else cleaned_url
 
     if not cleaned_url.startswith(('http://', 'https://')):
         cleaned_url = 'https://' + cleaned_url
 
     domain = urlparse(cleaned_url).netloc
-    publish_date = "Not Found (Meta Tag Missing)"
+    publish_date = "Not Found"
     text_content = ""
 
-    # Anti-bot Headers to avoid 403 Forbidden on news sites
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5'
-    }
-
+    # Engine 1: Newspaper3k Engine (Best for Universal Date Extraction)
     try:
-        res = requests.get(cleaned_url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-
-            # 1. Try Meta Tags
-            date_meta = (
-                soup.find('meta', property='article:published_time') or
-                soup.find('meta', attrs={'name': 'publish-date'}) or
-                soup.find('meta', attrs={'name': 'pubdate'}) or
-                soup.find('meta', attrs={'name': 'date'}) or
-                soup.find('meta', property='og:updated_time') or
-                soup.find('time')
-            )
-
-            if date_meta:
-                if date_meta.name == 'time' and date_meta.has_attr('datetime'):
-                    publish_date = date_meta['datetime'].split('T')[0]
-                elif date_meta.has_attr('content'):
-                    publish_date = date_meta['content'].split('T')[0]
-                elif date_meta.text:
-                    publish_date = date_meta.text.strip()
-
-            # 2. Try JSON-LD if Meta tag is missing
-            if "Not Found" in publish_date:
-                for script in soup.find_all('script', type='application/ld+json'):
-                    try:
-                        data = json.loads(script.string or '{}')
-                        if isinstance(data, list):
-                            data = data[0] if len(data) > 0 else {}
-                        
-                        date_val = data.get('datePublished') or data.get('dateCreated') or data.get('uploadDate')
-                        if date_val:
-                            publish_date = str(date_val).split('T')[0]
-                            break
-                    except Exception:
-                        continue
-
-            # Extract Content Paragraphs
-            paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 35]
-            if paragraphs:
-                text_content = " ".join(paragraphs[:5])
-
+        article = Article(cleaned_url)
+        article.download()
+        article.parse()
+        
+        if article.publish_date:
+            publish_date = article.publish_date.strftime("%Y-%m-%d %H:%M:%S IST")
+        
+        text_content = article.text
     except Exception:
         pass
 
+    # Engine 2: Custom Scraping with Anti-Bot Session Headers (Fallback)
+    if publish_date == "Not Found" or not text_content.strip():
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+        }
+        try:
+            res = requests.get(cleaned_url, headers=headers, timeout=8)
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, 'html.parser')
+
+                # Meta Tags for Publish Time
+                meta_tags = [
+                    'article:published_time', 'og:published_time', 'publication_date',
+                    'publish-date', 'pubdate', 'date', 'parsely-pub-date', 'created', 'updated_time'
+                ]
+                
+                for meta_name in meta_tags:
+                    tag = soup.find('meta', property=meta_name) or soup.find('meta', attrs={'name': meta_name})
+                    if tag and tag.get('content'):
+                        val = tag['content']
+                        try:
+                            parsed_dt = parser.parse(val)
+                            publish_date = parsed_dt.strftime("%Y-%m-%d %H:%M:%S IST")
+                            break
+                        except Exception:
+                            date_match = re.search(r'20\d{2}[-/]\d{2}[-/]\d{2}', val)
+                            if date_match:
+                                publish_date = date_match.group(0).replace('/', '-')
+                                break
+
+                # JSON-LD Structured Data
+                if publish_date == "Not Found":
+                    for script in soup.find_all('script', type='application/ld+json'):
+                        try:
+                            raw_json = script.string or script.text or ''
+                            data_list = json.loads(raw_json)
+                            if not isinstance(data_list, list):
+                                data_list = [data_list]
+                            
+                            for data in data_list:
+                                date_val = data.get('datePublished') or data.get('dateCreated') or data.get('uploadDate')
+                                if date_val:
+                                    parsed_dt = parser.parse(str(date_val))
+                                    publish_date = parsed_dt.strftime("%Y-%m-%d %H:%M:%S IST")
+                                    break
+                            if publish_date != "Not Found":
+                                break
+                        except Exception:
+                            continue
+
+                if not text_content.strip():
+                    paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 35]
+                    text_content = " ".join(paragraphs[:5])
+
+        except Exception:
+            pass
+
+    # Engine 3: URL Path Regex Search Fallback
+    if publish_date == "Not Found":
+        url_date = re.search(r'/(20\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])/', cleaned_url)
+        if url_date:
+            publish_date = f"{url_date.group(1)}-{url_date.group(2)}-{url_date.group(3)}"
+
     if not text_content.strip():
-        text_content = f"Official news report content fetched from domain source: {domain if domain else 'Unknown Source'}."
+        text_content = f"Official news report coverage analyzed from domain source: {domain if domain else 'Unknown Source'}."
 
     return text_content, domain, publish_date
 
-# Embedded HTML Interface
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -165,17 +191,14 @@ HTML_TEMPLATE = """
             </ul>
 
             <div class="tab-content" id="pills-tabContent">
-                <!-- Text Panel -->
                 <div class="tab-pane fade show active" id="text-panel">
                     <textarea id="text-input" class="form-control mb-3" rows="5" placeholder="Paste article text here..."></textarea>
                     <button class="btn btn-primary w-100" onclick="submitData('text')">Analyze Text</button>
                 </div>
-                <!-- URL Panel -->
                 <div class="tab-pane fade" id="url-panel">
                     <input type="url" id="url-input" class="form-control mb-3" placeholder="https://example.com/news-article">
                     <button class="btn btn-primary w-100" onclick="submitData('url')">Analyze Link</button>
                 </div>
-                <!-- Image Panel -->
                 <div class="tab-pane fade" id="image-panel">
                     <input type="file" id="image-input" class="form-control mb-3" accept="image/*">
                     <button class="btn btn-primary w-100" onclick="submitData('image')">Analyze Image OCR</button>
@@ -302,7 +325,6 @@ def predict():
             confidence = round(top_pred.get('score', 0) * 100, 2)
             label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
         
-        # Automatic Fallback Engine
         if not label:
             label, confidence = local_heuristic_classifier(truncated_text)
 
