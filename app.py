@@ -8,12 +8,8 @@ from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# Hugging Face Router URL
-HF_MODEL_URL = "https://router.huggingface.co/hf-inference/models/alok-123tripathi/fakenews-model"
-
-# OPTIONAL: Agar aapka token HF_TOKEN environment variable me set hai to render automatic utha lega, 
-# nahi to yahan "hf_xxxx" ki jagah apna token likh sakte hain.
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+# Standard Hugging Face Serverless Inference API URL
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/alok-123tripathi/fakenews-model"
 
 reader = None
 
@@ -25,11 +21,14 @@ def get_ocr_reader():
     return reader
 
 def query_huggingface(payload):
+    token = os.environ.get("HF_TOKEN", "").strip()
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
-    if HF_TOKEN:
-        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+    
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     try:
         response = requests.post(HF_MODEL_URL, json=payload, headers=headers, timeout=30)
@@ -37,20 +36,19 @@ def query_huggingface(payload):
         if response.status_code == 200:
             return response.json()
         elif response.status_code == 503:
-            return {"error": "Model is warming up on Hugging Face. Please click Analyze again in 15 seconds."}
+            return {"error": "Model loading/warming up on Hugging Face. Please click Analyze again in 15-20 seconds."}
         else:
-            return {"error": f"Hugging Face HTTP {response.status_code}: {response.text[:100]}"}
+            return {"error": f"Hugging Face HTTP {response.status_code}: {response.text[:120]}"}
             
     except Exception as e:
         return {"error": f"API Connection Error: {str(e)}"}
 
 def extract_metadata_from_url(raw_input):
-    # Extremely aggressive URL cleaner for double pasted / markdown URLs
     urls_found = re.findall(r'https?://[^\s\]\)\>\"\']+', raw_input)
-    if urls_found:
-        cleaned_url = urls_found[0]
-    else:
-        cleaned_url = raw_input.strip()
+    cleaned_url = urls_found[0] if urls_found else raw_input.strip()
+
+    if not cleaned_url.startswith(('http://', 'https://')):
+        cleaned_url = 'https://' + cleaned_url
 
     domain = urlparse(cleaned_url).netloc
     publish_date = "Not Found (Meta Tag Missing)"
@@ -89,7 +87,7 @@ def extract_metadata_from_url(raw_input):
         pass
 
     if not text_content.strip():
-        text_content = f"Official news content fetched from news source domain: {domain if domain else 'External Website'}."
+        text_content = f"Official news report content fetched from domain source: {domain if domain else 'Unknown Source'}."
 
     return text_content, domain, publish_date
 
@@ -121,7 +119,7 @@ def predict():
                 text_content = " ".join([res[1] for res in results])
 
         if not text_content.strip():
-            text_content = "Default news article text sample."
+            return jsonify({'error': 'No readable text could be processed.'}), 400
 
         truncated_text = text_content[:512]
         api_output = query_huggingface({"inputs": truncated_text})
@@ -139,7 +137,7 @@ def predict():
             predictions = [api_output]
 
         if not predictions:
-            return jsonify({'error': 'Could not parse prediction response.'}), 500
+            return jsonify({'error': 'Could not parse prediction output.'}), 500
 
         top_pred = max(predictions, key=lambda x: x.get('score', 0))
         
