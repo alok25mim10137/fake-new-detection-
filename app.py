@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, render_template, render_template_string, jsonify
 import requests
 import os
 import re
@@ -7,7 +7,9 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urlparse
 
-app = Flask(__name__)
+# Explicit template folder path to avoid 404
+template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'templates'))
+app = Flask(__name__, template_folder=template_dir)
 
 # Modern Hugging Face Inference Router Endpoint
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/v1/models/alok-123tripathi/fakenews-model"
@@ -122,4 +124,77 @@ def extract_metadata_from_url(raw_input):
     if not text_content.strip():
         text_content = f"Official news report content fetched from domain source: {domain if domain else 'Unknown Source'}."
 
-    return text_content, domain, publish_
+    return text_content, domain, publish_date
+
+@app.route('/')
+def home():
+    try:
+        return render_template('index.html')
+    except Exception:
+        # Fallback if templates directory path resolution differs on Render container
+        index_path = os.path.join(os.path.dirname(__file__), 'templates', 'index.html')
+        if os.path.exists(index_path):
+            with open(index_path, 'r', encoding='utf-8') as f:
+                return render_template_string(f.read())
+        return "<h3>Fake News Portal Running. Templates folder missing.</h3>", 200
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    try:
+        data = request.get_json(silent=True) or {}
+        input_type = data.get('type') or request.form.get('type')
+        text_content = ""
+        source_domain = None
+        publish_date = None
+
+        if input_type == 'text':
+            text_content = data.get('content') or request.form.get('content', '')
+
+        elif input_type == 'url':
+            url = data.get('content') or request.form.get('content', '')
+            text_content, source_domain, publish_date = extract_metadata_from_url(url)
+
+        elif input_type == 'image':
+            if 'file' in request.files:
+                file = request.files['file']
+                ocr_engine = get_ocr_reader()
+                results = ocr_engine.readtext(file.read())
+                text_content = " ".join([res[1] for res in results])
+
+        if not text_content.strip():
+            return jsonify({'error': 'No readable text could be processed.'}), 400
+
+        truncated_text = text_content[:512]
+        api_output, err = query_huggingface({"inputs": truncated_text})
+
+        label = None
+        confidence = 85.0
+
+        if api_output and isinstance(api_output, list):
+            predictions = api_output[0] if isinstance(api_output[0], list) else api_output
+            top_pred = max(predictions, key=lambda x: x.get('score', 0))
+            raw_label = str(top_pred.get('label', ''))
+            confidence = round(top_pred.get('score', 0) * 100, 2)
+            label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
+        
+        # Automatic Fallback Engine if API fails or sleeps
+        if not label:
+            label, confidence = local_heuristic_classifier(truncated_text)
+
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        return jsonify({
+            'label': label,
+            'confidence': confidence,
+            'timestamp': current_time,
+            'source_domain': source_domain,
+            'publish_date': publish_date,
+            'extracted_text': text_content[:250]
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
