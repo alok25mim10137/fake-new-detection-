@@ -4,3 +4,4 @@ beautifulsoup4
 easyocr
 newspaper3k
 python-dateutil
+gunicorn
