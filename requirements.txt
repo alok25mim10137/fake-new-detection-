@@ -1,7 +1,8 @@
 Flask
 requests
 beautifulsoup4
-easyocr
+pytesseract
+Pillow
 python-dateutil
 gunicorn
 lxml_html_clean
