@@ -7,3 +7,4 @@ python-dateutil
 gunicorn
 lxml_html_clean
 newspaper3k
+easyocr
