@@ -1,10 +1,6 @@
-Flask
+flask
 requests
 beautifulsoup4
-pytesseract
-Pillow
 python-dateutil
+pillow
 gunicorn
-lxml_html_clean
-newspaper3k
-easyocr
