@@ -32,7 +32,13 @@ def extract_text_via_free_ocr(file_bytes):
         print(f"OCR API Error: {e}")
         return ""
 
-def local_heuristic_classifier(text):
+def local_heuristic_classifier(text, domain=""):
+    satire_domains = ['theonion.com', 'babylonbee.com', 'clickhole.com', 'infowars.com']
+    
+    # Satire Domain Check
+    if domain and any(satire in domain.lower() for satire in satire_domains):
+        return "FAKE", 95.0
+
     fake_triggers = [
         'miracle', 'cures all', 'secret remedy', '5g towers', 'pathogens',
         'lockdown confirmed', '100% cure', 'unexplained', 'shocking truth',
@@ -275,7 +281,7 @@ def predict():
         data = request.get_json(silent=True) or {}
         input_type = data.get('type') or request.form.get('type')
         text_content = ""
-        source_domain = None
+        source_domain = ""
         publish_date = None
 
         if input_type == 'text':
@@ -291,23 +297,29 @@ def predict():
                 text_content = extract_text_via_free_ocr(file.read())
 
         if not text_content.strip():
-            return jsonify({'error': 'No readable text could be processed from image.'}), 400
+            return jsonify({'error': 'No readable text could be processed.'}), 400
 
-        truncated_text = text_content[:512]
-        api_output, err = query_huggingface({"inputs": truncated_text})
+        # Known Satire Domain Override Check
+        satire_domains = ['theonion.com', 'babylonbee.com', 'clickhole.com', 'infowars.com']
+        if source_domain and any(satire in source_domain.lower() for satire in satire_domains):
+            label = "FAKE"
+            confidence = 95.0
+        else:
+            truncated_text = text_content[:512]
+            api_output, err = query_huggingface({"inputs": truncated_text})
 
-        label = None
-        confidence = 85.0
+            label = None
+            confidence = 85.0
 
-        if api_output and isinstance(api_output, list):
-            predictions = api_output[0] if isinstance(api_output[0], list) else api_output
-            top_pred = max(predictions, key=lambda x: x.get('score', 0))
-            raw_label = str(top_pred.get('label', ''))
-            confidence = round(top_pred.get('score', 0) * 100, 2)
-            label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
-        
-        if not label:
-            label, confidence = local_heuristic_classifier(truncated_text)
+            if api_output and isinstance(api_output, list):
+                predictions = api_output[0] if isinstance(api_output[0], list) else api_output
+                top_pred = max(predictions, key=lambda x: x.get('score', 0))
+                raw_label = str(top_pred.get('label', ''))
+                confidence = round(top_pred.get('score', 0) * 100, 2)
+                label = "REAL" if "1" in raw_label or "REAL" in raw_label.upper() or "LABEL_1" in raw_label else "FAKE"
+            
+            if not label:
+                label, confidence = local_heuristic_classifier(truncated_text, source_domain)
 
         # Indian Standard Time (IST = UTC + 5:30)
         ist_time = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
@@ -317,7 +329,7 @@ def predict():
             'label': label,
             'confidence': confidence,
             'timestamp': current_time_ist,
-            'source_domain': source_domain,
+            'source_domain': source_domain if source_domain else "Direct Input",
             'publish_date': publish_date,
             'extracted_text': text_content[:250]
         })
