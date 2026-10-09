@@ -7,12 +7,30 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 from dateutil import parser
-from PIL import Image
-import pytesseract
 
 app = Flask(__name__)
 
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/v1/models/alok-123tripathi/fakenews-model"
+
+def extract_text_via_free_ocr(file_bytes):
+    try:
+        url = 'https://api.ocr.space/parse/image'
+        payload = {
+            'apikey': 'helloworld',
+            'language': 'eng',
+            'isOverlayRequired': False
+        }
+        files = {'filename': ('image.jpg', file_bytes, 'image/jpeg')}
+        response = requests.post(url, data=payload, files=files, timeout=12)
+        result = response.json()
+        
+        if result.get("ParsedResults"):
+            parsed_text = result["ParsedResults"][0].get("ParsedText", "")
+            return parsed_text.strip()
+        return ""
+    except Exception as e:
+        print(f"OCR API Error: {e}")
+        return ""
 
 def local_heuristic_classifier(text):
     fake_triggers = [
@@ -270,11 +288,10 @@ def predict():
         elif input_type == 'image':
             if 'file' in request.files:
                 file = request.files['file']
-                img = Image.open(file.stream)
-                text_content = pytesseract.image_to_string(img)
+                text_content = extract_text_via_free_ocr(file.read())
 
         if not text_content.strip():
-            return jsonify({'error': 'No readable text could be processed.'}), 400
+            return jsonify({'error': 'No readable text could be processed from image.'}), 400
 
         truncated_text = text_content[:512]
         api_output, err = query_huggingface({"inputs": truncated_text})
