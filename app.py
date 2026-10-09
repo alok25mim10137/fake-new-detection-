@@ -7,30 +7,12 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 from dateutil import parser
+from PIL import Image
+import pytesseract
 
 app = Flask(__name__)
 
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/v1/models/alok-123tripathi/fakenews-model"
-
-# Render environment ke liye writable temporary folder set kar rahe hain
-os.environ['EASYOCR_MODULE_PATH'] = '/tmp'
-MODEL_DIR = '/tmp/easyocr_models'
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-reader = None
-
-def get_ocr_reader():
-    global reader
-    if reader is None:
-        import easyocr
-        # model_storage_directory aur download_enabled explicitly add kar diya hai
-        reader = easyocr.Reader(
-            ['en'], 
-            gpu=False, 
-            model_storage_directory=MODEL_DIR, 
-            download_enabled=True
-        )
-    return reader
 
 def local_heuristic_classifier(text):
     fake_triggers = [
@@ -288,9 +270,8 @@ def predict():
         elif input_type == 'image':
             if 'file' in request.files:
                 file = request.files['file']
-                ocr_engine = get_ocr_reader()
-                results = ocr_engine.readtext(file.read())
-                text_content = " ".join([res[1] for res in results])
+                img = Image.open(file.stream)
+                text_content = pytesseract.image_to_string(img)
 
         if not text_content.strip():
             return jsonify({'error': 'No readable text could be processed.'}), 400
