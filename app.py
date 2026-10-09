@@ -1,8 +1,8 @@
-from flask import Flask, request, render_template_string, jsonify
 import requests
 import os
 import re
 import json
+from flask import Flask, render_template_string, jsonify, request
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
@@ -12,13 +12,24 @@ app = Flask(__name__)
 
 HF_MODEL_URL = "https://router.huggingface.co/hf-inference/v1/models/alok-123tripathi/fakenews-model"
 
+# Render environment ke liye writable temporary folder set kar rahe hain
+os.environ['EASYOCR_MODULE_PATH'] = '/tmp'
+MODEL_DIR = '/tmp/easyocr_models'
+os.makedirs(MODEL_DIR, exist_ok=True)
+
 reader = None
 
 def get_ocr_reader():
     global reader
     if reader is None:
         import easyocr
-        reader = easyocr.Reader(['en'], gpu=False)
+        # model_storage_directory aur download_enabled explicitly add kar diya hai
+        reader = easyocr.Reader(
+            ['en'], 
+            gpu=False, 
+            model_storage_directory=MODEL_DIR, 
+            download_enabled=True
+        )
     return reader
 
 def local_heuristic_classifier(text):
